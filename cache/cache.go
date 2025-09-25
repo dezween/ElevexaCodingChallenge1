@@ -40,17 +40,19 @@ type Cache struct {
 	hits       int64
 	misses     int64
 	client     *http.Client
+	Logger     *log.Logger
 }
 
-// NewCache creates a new cache instance with the specified default TTL.
+// NewCache creates a new cache instance with the specified default TTL and logger.
 // The defaultTTL parameter determines how long entries will be kept in cache
 // before being considered stale.
-func NewCache(defaultTTL time.Duration) *Cache {
+func NewCache(defaultTTL time.Duration, logger *log.Logger) *Cache {
 	return &Cache{
 		data:       make(map[string]*cacheEntry),
 		pending:    make(map[string]*pendingRequest),
 		defaultTTL: defaultTTL,
 		client:     &http.Client{},
+		Logger:     logger,
 	}
 }
 
@@ -74,14 +76,16 @@ func (c *Cache) Fetch(ctx context.Context, url string, ttlOverride ...time.Durat
 	}
 
 	// Check cache first
-	if data, ok := c.getFromCache(url); ok {
+	if data, ok := c.loadAndValidateCache(url); ok {
 		return data, nil
 	}
 
 	c.mu.Lock()
+	// Important: checking and setting pendingRequest is protected by a single lock.
+	// This prevents a race condition between goroutines when creating a pendingRequest.
 	if _, exists := c.pending[url]; exists {
 		c.mu.Unlock()
-		data, err, _ := c.waitPendingRequest(url)
+		data, err := c.waitPendingRequest(url)
 		return data, err
 	}
 	// Create new pending request
@@ -113,15 +117,18 @@ func (c *Cache) Fetch(ctx context.Context, url string, ttlOverride ...time.Durat
 	return data, err
 }
 
-// getFromCache attempts to retrieve and validate a cache entry
-func (c *Cache) getFromCache(url string) ([]byte, bool) {
+// loadAndValidateCache attempts to retrieve and validate a cache entry
+// Note: This function uses double locking (RLock and Lock) when deleting an expired entry.
+// This is an intentional optimization: most accesses are reads, so RLock is faster.
+// Lock is only acquired if an expired entry needs to be deleted, which is rare.
+func (c *Cache) loadAndValidateCache(url string) ([]byte, bool) {
 	c.mu.RLock()
 	entry, exists := c.data[url]
 	c.mu.RUnlock()
 
 	if !exists {
 		atomic.AddInt64(&c.misses, 1)
-		log.Printf("Cache MISS for URL: %s", url)
+		c.Logger.Printf("Cache MISS for URL: %s", url)
 		return nil, false
 	}
 
@@ -130,27 +137,27 @@ func (c *Cache) getFromCache(url string) ([]byte, bool) {
 		delete(c.data, url)
 		c.mu.Unlock()
 		atomic.AddInt64(&c.misses, 1)
-		log.Printf("Cache MISS (expired) for URL: %s", url)
+		c.Logger.Printf("Cache MISS (expired) for URL: %s", url)
 		return nil, false
 	}
 
 	atomic.AddInt64(&c.hits, 1)
-	log.Printf("Cache HIT for URL: %s", url)
+	c.Logger.Printf("Cache HIT for URL: %s", url)
 	return entry.data, true
 }
 
 // waitPendingRequest waits for an ongoing request to complete if one exists
-func (c *Cache) waitPendingRequest(url string) ([]byte, error, bool) {
+func (c *Cache) waitPendingRequest(url string) ([]byte, error) {
 	c.mu.RLock()
 	req, exists := c.pending[url]
 	c.mu.RUnlock()
 
 	if !exists {
-		return nil, nil, false
+		return nil, nil
 	}
 
 	<-req.done
-	return req.data, req.err, true
+	return req.data, req.err
 }
 
 // fetchURL performs the actual HTTP request

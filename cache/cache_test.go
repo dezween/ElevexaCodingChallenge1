@@ -3,6 +3,8 @@ package cache
 import (
 	"context"
 	"fmt"
+	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -23,7 +25,7 @@ func TestCacheFetch(t *testing.T) {
 	}))
 	defer server.Close()
 
-	cache := NewCache(1 * time.Second)
+	cache := NewCache(1*time.Second, log.New(io.Discard, "", 0))
 
 	// First fetch - should miss
 	data, err := cache.Fetch(context.Background(), server.URL)
@@ -72,7 +74,7 @@ func TestCacheConcurrency(t *testing.T) {
 	}))
 	defer server.Close()
 
-	cache := NewCache(1 * time.Second)
+	cache := NewCache(1*time.Second, log.New(io.Discard, "", 0))
 	var wg sync.WaitGroup
 	concurrent := 10
 
@@ -114,7 +116,7 @@ func TestCacheTTL(t *testing.T) {
 	}))
 	defer server.Close()
 
-	cache := NewCache(500 * time.Millisecond)
+	cache := NewCache(500*time.Millisecond, log.New(io.Discard, "", 0))
 
 	// First fetch
 	_, err := cache.Fetch(context.Background(), server.URL)
@@ -153,7 +155,7 @@ func TestCacheFailedFetch(t *testing.T) {
 	}))
 	defer server.Close()
 
-	cache := NewCache(1 * time.Second)
+	cache := NewCache(1*time.Second, log.New(io.Discard, "", 0))
 
 	_, err := cache.Fetch(context.Background(), server.URL)
 	if err == nil {
@@ -175,7 +177,7 @@ func TestCacheContextCancel(t *testing.T) {
 	}))
 	defer server.Close()
 
-	cache := NewCache(1 * time.Second)
+	cache := NewCache(1*time.Second, log.New(io.Discard, "", 0))
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 
@@ -194,7 +196,7 @@ func TestCacheCustomTTL(t *testing.T) {
 	}))
 	defer server.Close()
 
-	cache := NewCache(10 * time.Second)
+	cache := NewCache(10*time.Second, log.New(io.Discard, "", 0))
 	shortTTL := 100 * time.Millisecond
 
 	_, err := cache.Fetch(context.Background(), server.URL, shortTTL)
@@ -217,7 +219,7 @@ func TestCacheParallelDifferentURLs(t *testing.T) {
 	}))
 	defer server.Close()
 
-	cache := NewCache(1 * time.Second)
+	cache := NewCache(1*time.Second, log.New(io.Discard, "", 0))
 	var wg sync.WaitGroup
 	urls := []string{server.URL + "/a", server.URL + "/b", server.URL + "/c"}
 	results := make([]string, len(urls))
@@ -254,7 +256,7 @@ func TestCacheRetryAfterFailure(t *testing.T) {
 	}))
 	defer server.Close()
 
-	cache := NewCache(1 * time.Second)
+	cache := NewCache(1*time.Second, log.New(io.Discard, "", 0))
 	_, err := cache.Fetch(context.Background(), server.URL)
 	if err == nil {
 		t.Error("expected error on first fetch")
@@ -271,7 +273,7 @@ func TestCacheRetryAfterFailure(t *testing.T) {
 
 // TestCacheEmptyURL checks that Fetch returns an error for an empty URL.
 func TestCacheEmptyURL(t *testing.T) {
-	cache := NewCache(1 * time.Second)
+	cache := NewCache(1*time.Second, log.New(io.Discard, "", 0))
 	_, err := cache.Fetch(context.Background(), "")
 	if err == nil {
 		t.Error("expected error for empty URL")
