@@ -74,6 +74,10 @@ func NewCache(defaultTTL time.Duration, logger *log.Logger) *Cache {
 //   - []byte: The fetched content
 //   - error: Any error that occurred during fetching or nil on success
 func (c *Cache) Fetch(ctx context.Context, url string, ttlOverride ...time.Duration) ([]byte, error) {
+	if url == "" {
+		return nil, fmt.Errorf("empty url")
+	}
+
 	ttl := c.defaultTTL
 	if len(ttlOverride) > 0 {
 		ttl = ttlOverride[0]
