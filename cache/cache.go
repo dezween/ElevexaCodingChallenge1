@@ -11,15 +11,15 @@ import (
 	"log"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
 // cacheEntry represents a single cache entry with its metadata
 type cacheEntry struct {
-	data       []byte
-	createdAt  time.Time
-	ttl        time.Duration
-	fetchError error
+	data      []byte
+	createdAt time.Time
+	ttl       time.Duration
 }
 
 // pendingRequest represents an ongoing request
@@ -37,8 +37,8 @@ type Cache struct {
 	data       map[string]*cacheEntry
 	pending    map[string]*pendingRequest
 	defaultTTL time.Duration
-	hits       int
-	misses     int
+	hits       int64
+	misses     int64
 	client     *http.Client
 }
 
@@ -78,16 +78,14 @@ func (c *Cache) Fetch(ctx context.Context, url string, ttlOverride ...time.Durat
 		return data, nil
 	}
 
-	var pendingReq *pendingRequest
 	c.mu.Lock()
-	if req, exists := c.pending[url]; exists {
-		pendingReq = req
+	if _, exists := c.pending[url]; exists {
 		c.mu.Unlock()
-		<-pendingReq.done
-		return pendingReq.data, pendingReq.err
+		data, err, _ := c.waitPendingRequest(url)
+		return data, err
 	}
 	// Create new pending request
-	pendingReq = &pendingRequest{
+	pendingReq := &pendingRequest{
 		done: make(chan struct{}),
 	}
 	c.pending[url] = pendingReq
@@ -122,26 +120,22 @@ func (c *Cache) getFromCache(url string) ([]byte, bool) {
 	c.mu.RUnlock()
 
 	if !exists {
-		c.mu.Lock()
-		c.misses++
+		atomic.AddInt64(&c.misses, 1)
 		log.Printf("Cache MISS for URL: %s", url)
-		c.mu.Unlock()
 		return nil, false
 	}
 
 	if time.Since(entry.createdAt) > entry.ttl {
 		c.mu.Lock()
 		delete(c.data, url)
-		c.misses++
-		log.Printf("Cache MISS (expired) for URL: %s", url)
 		c.mu.Unlock()
+		atomic.AddInt64(&c.misses, 1)
+		log.Printf("Cache MISS (expired) for URL: %s", url)
 		return nil, false
 	}
 
-	c.mu.Lock()
-	c.hits++
+	atomic.AddInt64(&c.hits, 1)
 	log.Printf("Cache HIT for URL: %s", url)
-	c.mu.Unlock()
 	return entry.data, true
 }
 
@@ -196,8 +190,13 @@ func (c *Cache) fetchURL(ctx context.Context, url string) ([]byte, error) {
 //   - hits: Number of cache hits
 //   - misses: Number of cache misses
 //   - entries: Current number of entries in cache
-func (c *Cache) Stats() (hits int, misses int, entries int) {
+//
+// Uses atomic for counters and lock only for map size.
+func (c *Cache) Stats() (int, int, int) {
+	hits := int(atomic.LoadInt64(&c.hits))
+	misses := int(atomic.LoadInt64(&c.misses))
 	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.hits, c.misses, len(c.data)
+	entries := len(c.data)
+	c.mu.RUnlock()
+	return hits, misses, entries
 }
