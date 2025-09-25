@@ -32,6 +32,8 @@ type pendingRequest struct {
 // Cache provides thread-safe HTTP content caching with TTL support.
 // It ensures that concurrent requests for the same URL are deduplicated
 // and maintains statistics about cache hits and misses.
+//
+// Logger may be nil. If nil, no logging will be performed.
 type Cache struct {
 	mu         sync.RWMutex
 	data       map[string]*cacheEntry
@@ -40,12 +42,14 @@ type Cache struct {
 	hits       int64
 	misses     int64
 	client     *http.Client
-	Logger     *log.Logger
+	Logger     *log.Logger // Optional: if nil, logging is disabled
 }
 
 // NewCache creates a new cache instance with the specified default TTL and logger.
 // The defaultTTL parameter determines how long entries will be kept in cache
 // before being considered stale.
+//
+// If logger is nil, no logging will be performed.
 func NewCache(defaultTTL time.Duration, logger *log.Logger) *Cache {
 	return &Cache{
 		data:       make(map[string]*cacheEntry),
@@ -128,7 +132,9 @@ func (c *Cache) loadAndValidateCache(url string) ([]byte, bool) {
 
 	if !exists {
 		atomic.AddInt64(&c.misses, 1)
-		c.Logger.Printf("Cache MISS for URL: %s", url)
+		if c.Logger != nil {
+			c.Logger.Printf("Cache MISS for URL: %s", url)
+		}
 		return nil, false
 	}
 
@@ -137,12 +143,16 @@ func (c *Cache) loadAndValidateCache(url string) ([]byte, bool) {
 		delete(c.data, url)
 		c.mu.Unlock()
 		atomic.AddInt64(&c.misses, 1)
-		c.Logger.Printf("Cache MISS (expired) for URL: %s", url)
+		if c.Logger != nil {
+			c.Logger.Printf("Cache MISS (expired) for URL: %s", url)
+		}
 		return nil, false
 	}
 
 	atomic.AddInt64(&c.hits, 1)
-	c.Logger.Printf("Cache HIT for URL: %s", url)
+	if c.Logger != nil {
+		c.Logger.Printf("Cache HIT for URL: %s", url)
+	}
 	return entry.data, true
 }
 
@@ -174,7 +184,9 @@ func (c *Cache) fetchURL(ctx context.Context, url string) ([]byte, error) {
 	defer func(Body io.ReadCloser) {
 		err := Body.Close()
 		if err != nil {
-			log.Printf("error closing response body: %v", err)
+			if c.Logger != nil {
+				c.Logger.Printf("error closing response body: %v", err)
+			}
 		}
 	}(resp.Body)
 
